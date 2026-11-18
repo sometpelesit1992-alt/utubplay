@@ -12,6 +12,7 @@ import android.os.Looper
 import android.os.SystemClock
 import android.view.Display
 import android.view.MotionEvent
+import android.view.View
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
@@ -152,6 +153,9 @@ class YouTubePresentation(context: Context, display: Display) : Presentation(con
         super.onCreate(savedInstanceState)
 
         val view = WebView(context).apply {
+            // Forces software compositing so video frames render inside VirtualDisplay instead of black DRM/overlay box
+            setLayerType(View.LAYER_TYPE_SOFTWARE, null)
+
             val cookieManager = CookieManager.getInstance()
             cookieManager.setAcceptCookie(true)
             cookieManager.setAcceptThirdPartyCookies(this, true)

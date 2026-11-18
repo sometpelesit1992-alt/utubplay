@@ -58,23 +58,29 @@ class YouTubeSurfaceScreen(carContext: CarContext) : Screen(carContext) {
     private var wakeLock: PowerManager.WakeLock? = null
 
     init {
-        // Keep CPU awake so WebView media buffer doesn't stall when phone screen locks
-        val pm = carContext.getSystemService(Context.POWER_SERVICE) as PowerManager
-        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "AAYouTube::MediaWakeLock").apply {
-            acquire(4 * 60 * 60 * 1000L) // 4 hours max
+        try {
+            val pm = carContext.getSystemService(Context.POWER_SERVICE) as PowerManager
+            wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "AAYouTube::MediaWakeLock").apply {
+                acquire(4 * 60 * 60 * 1000L)
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
 
-        // Request Audio Focus so Android Auto routes media audio continuously
-        val audioManager = carContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-        val focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
-            .setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_MEDIA)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_MOVIE)
-                    .build()
-            )
-            .build()
-        audioManager.requestAudioFocus(focusRequest)
+        try {
+            val audioManager = carContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            val focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                .setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_MOVIE)
+                        .build()
+                )
+                .build()
+            audioManager.requestAudioFocus(focusRequest)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
 
         try {
             carContext.getCarService(AppManager::class.java).setSurfaceCallback(object : SurfaceCallback {
@@ -114,7 +120,9 @@ class YouTubeSurfaceScreen(carContext: CarContext) : Screen(carContext) {
                         presentation = null
                         virtualDisplay?.release()
                         virtualDisplay = null
-                        if (wakeLock?.isHeld == true) wakeLock?.release()
+                        try {
+                            if (wakeLock?.isHeld == true) wakeLock?.release()
+                        } catch (_: Exception) {}
                     }
                 }
 
@@ -196,7 +204,6 @@ class YouTubePresentation(context: Context, display: Display) : Presentation(con
                 mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                 useWideViewPort = true
                 loadWithOverviewMode = true
-                // Desktop Chrome UA uses standard MSE video pipeline without mobile BotGuard interruption
                 userAgentString = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
             }
 

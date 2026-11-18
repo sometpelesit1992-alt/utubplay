@@ -6,13 +6,16 @@ import android.content.Context
 import android.content.Intent
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.os.SystemClock
 import android.view.Display
 import android.view.MotionEvent
-import android.view.View
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
@@ -52,8 +55,27 @@ class YouTubeSurfaceScreen(carContext: CarContext) : Screen(carContext) {
     private var virtualDisplay: VirtualDisplay? = null
     private var presentation: YouTubePresentation? = null
     private val mainHandler = Handler(Looper.getMainLooper())
+    private var wakeLock: PowerManager.WakeLock? = null
 
     init {
+        // Keep CPU awake so WebView media buffer doesn't stall when phone screen locks
+        val pm = carContext.getSystemService(Context.POWER_SERVICE) as PowerManager
+        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "AAYouTube::MediaWakeLock").apply {
+            acquire(4 * 60 * 60 * 1000L) // 4 hours max
+        }
+
+        // Request Audio Focus so Android Auto routes media audio continuously
+        val audioManager = carContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MOVIE)
+                    .build()
+            )
+            .build()
+        audioManager.requestAudioFocus(focusRequest)
+
         try {
             carContext.getCarService(AppManager::class.java).setSurfaceCallback(object : SurfaceCallback {
                 override fun onSurfaceAvailable(surfaceContainer: SurfaceContainer) {
@@ -92,6 +114,7 @@ class YouTubeSurfaceScreen(carContext: CarContext) : Screen(carContext) {
                         presentation = null
                         virtualDisplay?.release()
                         virtualDisplay = null
+                        if (wakeLock?.isHeld == true) wakeLock?.release()
                     }
                 }
 
@@ -161,8 +184,6 @@ class YouTubePresentation(context: Context, display: Display) : Presentation(con
         super.onCreate(savedInstanceState)
 
         val view = WebView(context).apply {
-            setLayerType(View.LAYER_TYPE_SOFTWARE, null)
-
             val cookieManager = CookieManager.getInstance()
             cookieManager.setAcceptCookie(true)
             cookieManager.setAcceptThirdPartyCookies(this, true)
@@ -175,7 +196,8 @@ class YouTubePresentation(context: Context, display: Display) : Presentation(con
                 mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                 useWideViewPort = true
                 loadWithOverviewMode = true
-                userAgentString = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
+                // Desktop Chrome UA uses standard MSE video pipeline without mobile BotGuard interruption
+                userAgentString = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
             }
 
             if (WebViewFeature.isFeatureSupported(WebViewFeature.REQUESTED_WITH_HEADER_ALLOW_LIST)) {
@@ -193,7 +215,7 @@ class YouTubePresentation(context: Context, display: Display) : Presentation(con
                 }
             }
             webChromeClient = WebChromeClient()
-            loadUrl("https://m.youtube.com")
+            loadUrl("https://www.youtube.com")
         }
 
         webView = view
@@ -221,7 +243,7 @@ class YouTubePresentation(context: Context, display: Display) : Presentation(con
                 goBtn.onclick = function() {
                     const q = encodeURIComponent(inp.value.trim());
                     kb.style.display = 'none';
-                    if (q) window.location.href = 'https://m.youtube.com/results?search_query=' + q;
+                    if (q) window.location.href = 'https://www.youtube.com/results?search_query=' + q;
                 };
 
                 const closeBtn = document.createElement('button');
@@ -261,13 +283,6 @@ class YouTubePresentation(context: Context, display: Display) : Presentation(con
                 });
 
                 document.body.appendChild(kb);
-
-                document.addEventListener('click', function(e) {
-                    const target = e.target;
-                    if (target && (target.tagName === 'INPUT' || target.closest('button[aria-label*="Search"]') || target.innerText === 'Search YouTube')) {
-                        kb.style.display = 'block';
-                    }
-                }, true);
             })();
         """.trimIndent()
         wv?.evaluateJavascript(js, null)
@@ -306,7 +321,7 @@ class YouTubePresentation(context: Context, display: Display) : Presentation(con
     }
 
     fun loadHome() {
-        webView?.loadUrl("https://m.youtube.com")
+        webView?.loadUrl("https://www.youtube.com")
     }
 
     fun reload() {

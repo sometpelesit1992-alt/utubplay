@@ -4,6 +4,7 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="androidx.car.app.ACCESS_SURFACE" />
+    <uses-permission android:name="androidx.car.app.NAVIGATION_TEMPLATES" />
 
     <application
         android:allowBackup="true"
@@ -33,13 +34,13 @@
             </intent-filter>
         </activity>
 
-        <!-- Android Auto Service -->
+        <!-- Android Auto Service (NAVIGATION category required for Surface + NavigationTemplate) -->
         <service
             android:name=".auto.YouTubeCarAppService"
             android:exported="true">
             <intent-filter>
                 <action android:name="androidx.car.app.CarAppService" />
-                <category android:name="androidx.car.app.category.IOT" />
+                <category android:name="androidx.car.app.category.NAVIGATION" />
             </intent-filter>
         </service>
     </application>

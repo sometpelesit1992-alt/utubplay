@@ -1,14 +1,19 @@
 package com.custom.aayoutube.auto
 
 import android.annotation.SuppressLint
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.app.Presentation
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -16,6 +21,7 @@ import android.os.PowerManager
 import android.os.SystemClock
 import android.view.Display
 import android.view.MotionEvent
+import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
@@ -34,10 +40,46 @@ import androidx.car.app.model.ActionStrip
 import androidx.car.app.model.Template
 import androidx.car.app.navigation.model.NavigationTemplate
 import androidx.car.app.validation.HostValidator
+import androidx.core.app.NotificationCompat
 import androidx.webkit.WebSettingsCompat
 import androidx.webkit.WebViewFeature
 
 class YouTubeCarAppService : CarAppService() {
+    override fun onCreate() {
+        super.onCreate()
+        startMediaForegroundService()
+    }
+
+    private fun startMediaForegroundService() {
+        val channelId = "aa_youtube_playback"
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                channelId,
+                "AA YouTube Background Playback",
+                NotificationManager.IMPORTANCE_LOW
+            )
+            nm.createNotificationChannel(channel)
+        }
+
+        val notification: Notification = NotificationCompat.Builder(this, channelId)
+            .setContentTitle("AA YouTube Player")
+            .setContentText("Background audio & video session active")
+            .setSmallIcon(android.R.drawable.ic_media_play)
+            .setOngoing(true)
+            .build()
+
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(1001, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
+            } else {
+                startForeground(1001, notification)
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
     override fun createHostValidator(): HostValidator {
         return HostValidator.ALLOW_ALL_HOSTS_VALIDATOR
     }
@@ -54,6 +96,7 @@ class YouTubeCarAppService : CarAppService() {
 class YouTubeSurfaceScreen(carContext: CarContext) : Screen(carContext) {
     private var virtualDisplay: VirtualDisplay? = null
     private var presentation: YouTubePresentation? = null
+    private var persistentWebView: WebView? = null
     private val mainHandler = Handler(Looper.getMainLooper())
     private var wakeLock: PowerManager.WakeLock? = null
 
@@ -61,7 +104,7 @@ class YouTubeSurfaceScreen(carContext: CarContext) : Screen(carContext) {
         try {
             val pm = carContext.getSystemService(Context.POWER_SERVICE) as PowerManager
             wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "AAYouTube::MediaWakeLock").apply {
-                acquire(4 * 60 * 60 * 1000L)
+                acquire(6 * 60 * 60 * 1000L)
             }
         } catch (e: Exception) {
             e.printStackTrace()
@@ -76,6 +119,7 @@ class YouTubeSurfaceScreen(carContext: CarContext) : Screen(carContext) {
                         .setContentType(AudioAttributes.CONTENT_TYPE_MOVIE)
                         .build()
                 )
+                .setWillPauseWhenDucked(false)
                 .build()
             audioManager.requestAudioFocus(focusRequest)
         } catch (e: Exception) {
@@ -92,20 +136,34 @@ class YouTubeSurfaceScreen(carContext: CarContext) : Screen(carContext) {
 
                     mainHandler.post {
                         try {
-                            val displayManager = carContext.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
-                            virtualDisplay = displayManager.createVirtualDisplay(
-                                "AAYouTubeDisplay",
-                                width,
-                                height,
-                                dpi,
-                                surface,
-                                DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY
-                            )
+                            if (persistentWebView == null) {
+                                persistentWebView = createPersistentWebView(carContext)
+                            }
+
+                            // Reuse existing VirtualDisplay if available, otherwise create once
+                            if (virtualDisplay == null) {
+                                val displayManager = carContext.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
+                                virtualDisplay = displayManager.createVirtualDisplay(
+                                    "AAYouTubeDisplay",
+                                    width,
+                                    height,
+                                    dpi,
+                                    surface,
+                                    DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY
+                                )
+                            } else {
+                                virtualDisplay?.resize(width, height, dpi)
+                                virtualDisplay?.surface = surface
+                            }
 
                             val display = virtualDisplay?.display ?: return@post
-                            presentation = YouTubePresentation(carContext, display).apply {
-                                show()
+                            if (presentation == null) {
+                                presentation = YouTubePresentation(carContext, display, persistentWebView!!).apply {
+                                    show()
+                                }
                             }
+                            persistentWebView?.onResume()
+                            persistentWebView?.resumeTimers()
                         } catch (e: Exception) {
                             e.printStackTrace()
                         }
@@ -114,24 +172,23 @@ class YouTubeSurfaceScreen(carContext: CarContext) : Screen(carContext) {
 
                 override fun onSurfaceDestroyed(surfaceContainer: SurfaceContainer) {
                     mainHandler.post {
+                        // Detach surface ONLY — do NOT destroy Presentation or WebView so playback continues
                         try {
-                            presentation?.dismiss()
-                        } catch (_: Exception) {}
-                        presentation = null
-                        virtualDisplay?.release()
-                        virtualDisplay = null
-                        try {
-                            if (wakeLock?.isHeld == true) wakeLock?.release()
-                        } catch (_: Exception) {}
+                            virtualDisplay?.surface = null
+                            persistentWebView?.onResume()
+                            persistentWebView?.resumeTimers()
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
                     }
                 }
 
                 override fun onClick(x: Float, y: Float) {
-                    mainHandler.post { presentation?.dispatchTap(x, y) }
+                    mainHandler.post { dispatchTap(x, y) }
                 }
 
                 override fun onScroll(distanceX: Float, distanceY: Float) {
-                    mainHandler.post { presentation?.dispatchScroll(distanceX, distanceY) }
+                    mainHandler.post { persistentWebView?.scrollBy(distanceX.toInt(), distanceY.toInt()) }
                 }
             })
         } catch (e: Exception) {
@@ -139,59 +196,9 @@ class YouTubeSurfaceScreen(carContext: CarContext) : Screen(carContext) {
         }
     }
 
-    override fun onGetTemplate(): Template {
-        val actionStrip = ActionStrip.Builder()
-            .addAction(
-                Action.Builder()
-                    .setTitle("Back")
-                    .setOnClickListener {
-                        if (presentation?.goBack() != true) {
-                            screenManager.pop()
-                        }
-                    }
-                    .build()
-            )
-            .addAction(
-                Action.Builder()
-                    .setTitle("Home")
-                    .setOnClickListener {
-                        presentation?.loadHome()
-                    }
-                    .build()
-            )
-            .addAction(
-                Action.Builder()
-                    .setTitle("Search")
-                    .setOnClickListener {
-                        presentation?.toggleKeyboard()
-                    }
-                    .build()
-            )
-            .addAction(
-                Action.Builder()
-                    .setTitle("Reload")
-                    .setOnClickListener {
-                        presentation?.reload()
-                    }
-                    .build()
-            )
-            .build()
-
-        return NavigationTemplate.Builder()
-            .setActionStrip(actionStrip)
-            .build()
-    }
-}
-
-class YouTubePresentation(context: Context, display: Display) : Presentation(context, display) {
-    var webView: WebView? = null
-        private set
-
     @SuppressLint("SetJavaScriptEnabled")
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-
-        val view = WebView(context).apply {
+    private fun createPersistentWebView(context: Context): WebView {
+        return WebView(context.applicationContext).apply {
             val cookieManager = CookieManager.getInstance()
             cookieManager.setAcceptCookie(true)
             cookieManager.setAcceptThirdPartyCookies(this, true)
@@ -218,20 +225,23 @@ class YouTubePresentation(context: Context, display: Display) : Presentation(con
 
                 override fun onPageFinished(view: WebView?, url: String?) {
                     super.onPageFinished(view, url)
-                    injectCarKeyboard(view)
+                    injectBackgroundAndKeyboardScripts(view)
                 }
             }
             webChromeClient = WebChromeClient()
             loadUrl("https://www.youtube.com")
         }
-
-        webView = view
-        setContentView(view)
     }
 
-    private fun injectCarKeyboard(wv: WebView?) {
+    private fun injectBackgroundAndKeyboardScripts(wv: WebView?) {
         val js = """
             (function() {
+                // 1. Prevent YouTube from pausing video when surface is hidden by Maps or Reverse Camera
+                Object.defineProperty(document, 'hidden', { get: function() { return false; }, configurable: true });
+                Object.defineProperty(document, 'visibilityState', { get: function() { return 'visible'; }, configurable: true });
+                document.addEventListener('visibilitychange', function(e) { e.stopImmediatePropagation(); }, true);
+
+                // 2. Car Touch Keyboard Overlay
                 if (document.getElementById('aa-car-kb')) return;
                 const kb = document.createElement('div');
                 kb.id = 'aa-car-kb';
@@ -295,15 +305,8 @@ class YouTubePresentation(context: Context, display: Display) : Presentation(con
         wv?.evaluateJavascript(js, null)
     }
 
-    fun toggleKeyboard() {
-        webView?.evaluateJavascript(
-            "var kb = document.getElementById('aa-car-kb'); if(kb) kb.style.display = (kb.style.display === 'none' ? 'block' : 'none');",
-            null
-        )
-    }
-
-    fun dispatchTap(x: Float, y: Float) {
-        val wv = webView ?: return
+    private fun dispatchTap(x: Float, y: Float) {
+        val wv = persistentWebView ?: return
         val downTime = SystemClock.uptimeMillis()
         val downEvent = MotionEvent.obtain(downTime, downTime, MotionEvent.ACTION_DOWN, x, y, 0)
         val upEvent = MotionEvent.obtain(downTime, downTime + 50, MotionEvent.ACTION_UP, x, y, 0)
@@ -313,25 +316,63 @@ class YouTubePresentation(context: Context, display: Display) : Presentation(con
         upEvent.recycle()
     }
 
-    fun dispatchScroll(distanceX: Float, distanceY: Float) {
-        webView?.scrollBy(distanceX.toInt(), distanceY.toInt())
-    }
+    override fun onGetTemplate(): Template {
+        val actionStrip = ActionStrip.Builder()
+            .addAction(
+                Action.Builder()
+                    .setTitle("Back")
+                    .setOnClickListener {
+                        if (persistentWebView?.canGoBack() == true) {
+                            persistentWebView?.goBack()
+                        } else {
+                            screenManager.pop()
+                        }
+                    }
+                    .build()
+            )
+            .addAction(
+                Action.Builder()
+                    .setTitle("Home")
+                    .setOnClickListener {
+                        persistentWebView?.loadUrl("https://www.youtube.com")
+                    }
+                    .build()
+            )
+            .addAction(
+                Action.Builder()
+                    .setTitle("Search")
+                    .setOnClickListener {
+                        persistentWebView?.evaluateJavascript(
+                            "var kb = document.getElementById('aa-car-kb'); if(kb) kb.style.display = (kb.style.display === 'none' ? 'block' : 'none');",
+                            null
+                        )
+                    }
+                    .build()
+            )
+            .addAction(
+                Action.Builder()
+                    .setTitle("Reload")
+                    .setOnClickListener {
+                        persistentWebView?.reload()
+                    }
+                    .build()
+            )
+            .build()
 
-    fun goBack(): Boolean {
-        val wv = webView ?: return false
-        return if (wv.canGoBack()) {
-            wv.goBack()
-            true
-        } else {
-            false
-        }
+        return NavigationTemplate.Builder()
+            .setActionStrip(actionStrip)
+            .build()
     }
+}
 
-    fun loadHome() {
-        webView?.loadUrl("https://www.youtube.com")
-    }
-
-    fun reload() {
-        webView?.reload()
+class YouTubePresentation(
+    context: Context,
+    display: Display,
+    private val webView: WebView
+) : Presentation(context, display) {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        (webView.parent as? ViewGroup)?.removeView(webView)
+        setContentView(webView)
     }
 }

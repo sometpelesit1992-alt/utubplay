@@ -12,7 +12,6 @@ import android.os.Looper
 import android.os.SystemClock
 import android.view.Display
 import android.view.MotionEvent
-import android.view.WindowManager
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
@@ -75,9 +74,7 @@ class YouTubeSurfaceScreen(carContext: CarContext) : Screen(carContext) {
                             )
 
                             val display = virtualDisplay?.display ?: return@post
-                            val displayContext = carContext.createDisplayContext(display)
-                            presentation = YouTubePresentation(displayContext, display).apply {
-                                window?.setType(WindowManager.LayoutParams.TYPE_PRIVATE_PRESENTATION)
+                            presentation = YouTubePresentation(carContext, display).apply {
                                 show()
                             }
                         } catch (e: Exception) {

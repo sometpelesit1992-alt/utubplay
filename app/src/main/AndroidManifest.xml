@@ -3,6 +3,7 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="androidx.car.app.ACCESS_SURFACE" />
     <uses-permission android:name="androidx.car.app.NAVIGATION_TEMPLATES" />
 
@@ -34,7 +35,7 @@
             </intent-filter>
         </activity>
 
-        <!-- Android Auto Service (NAVIGATION category required for Surface + NavigationTemplate) -->
+        <!-- Android Auto Service -->
         <service
             android:name=".auto.YouTubeCarAppService"
             android:exported="true">

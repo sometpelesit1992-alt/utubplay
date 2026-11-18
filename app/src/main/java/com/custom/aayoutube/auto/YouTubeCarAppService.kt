@@ -130,6 +130,14 @@ class YouTubeSurfaceScreen(carContext: CarContext) : Screen(carContext) {
             )
             .addAction(
                 Action.Builder()
+                    .setTitle("Search")
+                    .setOnClickListener {
+                        presentation?.toggleKeyboard()
+                    }
+                    .build()
+            )
+            .addAction(
+                Action.Builder()
                     .setTitle("Reload")
                     .setOnClickListener {
                         presentation?.reload()
@@ -153,7 +161,6 @@ class YouTubePresentation(context: Context, display: Display) : Presentation(con
         super.onCreate(savedInstanceState)
 
         val view = WebView(context).apply {
-            // Forces software compositing so video frames render inside VirtualDisplay instead of black DRM/overlay box
             setLayerType(View.LAYER_TYPE_SOFTWARE, null)
 
             val cookieManager = CookieManager.getInstance()
@@ -179,6 +186,11 @@ class YouTubePresentation(context: Context, display: Display) : Presentation(con
                 override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                     return false
                 }
+
+                override fun onPageFinished(view: WebView?, url: String?) {
+                    super.onPageFinished(view, url)
+                    injectCarKeyboard(view)
+                }
             }
             webChromeClient = WebChromeClient()
             loadUrl("https://m.youtube.com")
@@ -186,6 +198,86 @@ class YouTubePresentation(context: Context, display: Display) : Presentation(con
 
         webView = view
         setContentView(view)
+    }
+
+    private fun injectCarKeyboard(wv: WebView?) {
+        val js = """
+            (function() {
+                if (document.getElementById('aa-car-kb')) return;
+                const kb = document.createElement('div');
+                kb.id = 'aa-car-kb';
+                kb.style.cssText = 'display:none;position:fixed;bottom:0;left:0;width:100%;background:#181818;z-index:999999;padding:8px;box-sizing:border-box;border-top:2px solid #444;font-family:sans-serif;';
+                
+                const bar = document.createElement('div');
+                bar.style.cssText = 'display:flex;gap:6px;margin-bottom:6px;';
+                const inp = document.createElement('input');
+                inp.id = 'aa-kb-input';
+                inp.placeholder = 'Type video to search...';
+                inp.style.cssText = 'flex:1;font-size:18px;padding:8px 12px;border-radius:6px;border:1px solid #555;background:#000;color:#fff;';
+                
+                const goBtn = document.createElement('button');
+                goBtn.innerText = 'GO';
+                goBtn.style.cssText = 'background:#cc0000;color:#fff;font-weight:bold;font-size:16px;padding:0 20px;border:none;border-radius:6px;';
+                goBtn.onclick = function() {
+                    const q = encodeURIComponent(inp.value.trim());
+                    kb.style.display = 'none';
+                    if (q) window.location.href = 'https://m.youtube.com/results?search_query=' + q;
+                };
+
+                const closeBtn = document.createElement('button');
+                closeBtn.innerText = 'X';
+                closeBtn.style.cssText = 'background:#333;color:#fff;font-size:16px;padding:0 14px;border:none;border-radius:6px;';
+                closeBtn.onclick = function() { kb.style.display = 'none'; };
+
+                bar.appendChild(inp);
+                bar.appendChild(goBtn);
+                bar.appendChild(closeBtn);
+                kb.appendChild(bar);
+
+                const rows = [
+                    ['1','2','3','4','5','6','7','8','9','0'],
+                    ['Q','W','E','R','T','Y','U','I','O','P'],
+                    ['A','S','D','F','G','H','J','K','L'],
+                    ['Z','X','C','V','B','N','M','DEL'],
+                    ['SPACE']
+                ];
+
+                rows.forEach(row => {
+                    const rDiv = document.createElement('div');
+                    rDiv.style.cssText = 'display:flex;justify-content:center;gap:5px;margin-bottom:5px;';
+                    row.forEach(key => {
+                        const btn = document.createElement('button');
+                        btn.innerText = key === 'SPACE' ? 'SPACE' : key;
+                        btn.style.cssText = 'flex:' + (key === 'SPACE' ? '4' : '1') + ';height:38px;font-size:16px;font-weight:bold;background:#2b2b2b;color:#fff;border:1px solid #444;border-radius:5px;';
+                        btn.onclick = function(e) {
+                            e.stopPropagation();
+                            if (key === 'DEL') inp.value = inp.value.slice(0, -1);
+                            else if (key === 'SPACE') inp.value += ' ';
+                            else inp.value += key.toLowerCase();
+                        };
+                        rDiv.appendChild(btn);
+                    });
+                    kb.appendChild(rDiv);
+                });
+
+                document.body.appendChild(kb);
+
+                document.addEventListener('click', function(e) {
+                    const target = e.target;
+                    if (target && (target.tagName === 'INPUT' || target.closest('button[aria-label*="Search"]') || target.innerText === 'Search YouTube')) {
+                        kb.style.display = 'block';
+                    }
+                }, true);
+            })();
+        """.trimIndent()
+        wv?.evaluateJavascript(js, null)
+    }
+
+    fun toggleKeyboard() {
+        webView?.evaluateJavascript(
+            "var kb = document.getElementById('aa-car-kb'); if(kb) kb.style.display = (kb.style.display === 'none' ? 'block' : 'none');",
+            null
+        )
     }
 
     fun dispatchTap(x: Float, y: Float) {
